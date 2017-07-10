@@ -22,6 +22,8 @@
 #include "sd-event.h"
 #include "log.h"
 #include "util.h"
+#include "macro.h"
+#include "signal-util.h"
 
 static int prepare_handler(sd_event_source *s, void *userdata) {
         log_info("preparing %c", PTR_TO_INT(userdata));
@@ -62,12 +64,12 @@ static int io_handler(sd_event_source *s, int fd, uint32_t revents, void *userda
 
 static int child_handler(sd_event_source *s, const siginfo_t *si, void *userdata) {
 
-        assert(s);
-        assert(si);
+        assert_se(s);
+        assert_se(si);
 
         log_info("got child on %c", PTR_TO_INT(userdata));
 
-        assert(userdata == INT_TO_PTR('f'));
+        assert_se(userdata == INT_TO_PTR('f'));
 
         assert_se(sd_event_exit(sd_event_source_get_event(s), 0) >= 0);
         sd_event_source_unref(s);
@@ -77,19 +79,16 @@ static int child_handler(sd_event_source *s, const siginfo_t *si, void *userdata
 
 static int signal_handler(sd_event_source *s, const struct signalfd_siginfo *si, void *userdata) {
         sd_event_source *p = NULL;
-        sigset_t ss;
         pid_t pid;
 
-        assert(s);
-        assert(si);
+        assert_se(s);
+        assert_se(si);
 
         log_info("got signal on %c", PTR_TO_INT(userdata));
 
-        assert(userdata == INT_TO_PTR('e'));
+        assert_se(userdata == INT_TO_PTR('e'));
 
-        assert_se(sigemptyset(&ss) >= 0);
-        assert_se(sigaddset(&ss, SIGCHLD) >= 0);
-        assert_se(sigprocmask(SIG_BLOCK, &ss, NULL) >= 0);
+        assert_se(sigprocmask_many(SIG_BLOCK, NULL, SIGCHLD, -1) >= 0);
 
         pid = fork();
         assert_se(pid >= 0);
@@ -107,17 +106,15 @@ static int signal_handler(sd_event_source *s, const struct signalfd_siginfo *si,
 
 static int defer_handler(sd_event_source *s, void *userdata) {
         sd_event_source *p = NULL;
-        sigset_t ss;
 
-        assert(s);
+        assert_se(s);
 
         log_info("got defer on %c", PTR_TO_INT(userdata));
 
-        assert(userdata == INT_TO_PTR('d'));
+        assert_se(userdata == INT_TO_PTR('d'));
 
-        assert_se(sigemptyset(&ss) >= 0);
-        assert_se(sigaddset(&ss, SIGUSR1) >= 0);
-        assert_se(sigprocmask(SIG_BLOCK, &ss, NULL) >= 0);
+        assert_se(sigprocmask_many(SIG_BLOCK, NULL, SIGUSR1, -1) >= 0);
+
         assert_se(sd_event_add_signal(sd_event_source_get_event(s), &p, SIGUSR1, signal_handler, INT_TO_PTR('e')) >= 0);
         assert_se(sd_event_source_set_enabled(p, SD_EVENT_ONESHOT) >= 0);
         raise(SIGUSR1);
@@ -140,7 +137,7 @@ static int time_handler(sd_event_source *s, uint64_t usec, void *userdata) {
                         assert_se(sd_event_add_defer(sd_event_source_get_event(s), &p, defer_handler, INT_TO_PTR('d')) >= 0);
                         assert_se(sd_event_source_set_enabled(p, SD_EVENT_ONESHOT) >= 0);
                 } else {
-                        assert(!got_c);
+                        assert_se(!got_c);
                         got_c = true;
                 }
         } else
@@ -207,7 +204,7 @@ int main(int argc, char *argv[]) {
         assert_se(sd_event_source_set_prepare(z, prepare_handler) >= 0);
 
         /* Test for floating event sources */
-        assert_se(sigprocmask_many(SIG_BLOCK, SIGRTMIN+1, -1) == 0);
+        assert_se(sigprocmask_many(SIG_BLOCK, NULL, SIGRTMIN+1, -1) >= 0);
         assert_se(sd_event_add_signal(e, NULL, SIGRTMIN+1, NULL, NULL) >= 0);
 
         assert_se(write(a[1], &ch, 1) >= 0);

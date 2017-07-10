@@ -28,15 +28,6 @@ if [ -f .git/hooks/pre-commit.sample ] && [ ! -f .git/hooks/pre-commit ]; then
         echo "Activated pre-commit hook." || :
 fi
 
-if which gtkdocize >/dev/null 2>/dev/null; then
-        gtkdocize --docdir docs/ --flavour no-tmpl
-        gtkdocargs=--enable-gtk-doc
-else
-        echo "You don't have gtk-doc installed, and thus won't be able to generate the documentation."
-        rm -f docs/gtk-doc.make
-        echo 'EXTRA_DIST =' > docs/gtk-doc.make
-fi
-
 intltoolize --force --automake
 autoreconf --force --install --symlink
 
@@ -48,11 +39,15 @@ args="\
 --sysconfdir=/etc \
 --localstatedir=/var \
 --libdir=$(libdir /usr/lib) \
-$gtkdocargs"
+"
+
+if [ -f "$topdir/.config.args" ]; then
+        args="$args $(cat $topdir/.config.args)"
+fi
 
 if [ ! -L /bin ]; then
 args="$args \
---with-rootprefix= \
+--with-rootprefix=/ \
 --with-rootlibdir=$(libdir /lib) \
 "
 fi
@@ -69,7 +64,7 @@ elif [ "x$1" = "xa" ]; then
         $topdir/configure CFLAGS='-g -O0 -Wsuggest-attribute=pure -Wsuggest-attribute=const -ftrapv' --enable-compat-libs --enable-kdbus $args
         make clean
 elif [ "x$1" = "xl" ]; then
-        $topdir/configure CC=clang CFLAGS='-g -O0 -ftrapv -Wno-gnu' --enable-compat-libs --enable-kdbus $args
+        $topdir/configure CC=clang CFLAGS='-g -O0 -ftrapv' --enable-compat-libs --enable-kdbus $args
         make clean
 elif [ "x$1" = "xs" ]; then
         scan-build $topdir/configure CFLAGS='-std=gnu99 -g -O0 -ftrapv' --enable-kdbus $args

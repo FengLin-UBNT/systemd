@@ -19,7 +19,6 @@
   along with systemd; If not, see <http://www.gnu.org/licenses/>.
 ***/
 
-#include <limits.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <errno.h>
@@ -46,8 +45,7 @@ static bool arg_all = false;
 static int arg_full = -1;
 static char* arg_machine = NULL;
 
-static int help(void) {
-
+static void help(void) {
         printf("%s [OPTIONS...] [CGROUP...]\n\n"
                "Recursively show control group contents.\n\n"
                "  -h --help           Show this help\n"
@@ -56,10 +54,8 @@ static int help(void) {
                "  -a --all            Show all groups, including empty\n"
                "  -l --full           Do not ellipsize output\n"
                "  -k                  Include kernel threads in output\n"
-               "  -M --machine        Show container\n",
-               program_invocation_short_name);
-
-        return 0;
+               "  -M --machine        Show container\n"
+               , program_invocation_short_name);
 }
 
 static int parse_argv(int argc, char *argv[]) {
@@ -84,12 +80,13 @@ static int parse_argv(int argc, char *argv[]) {
         assert(argc >= 1);
         assert(argv);
 
-        while ((c = getopt_long(argc, argv, "hkalM:", options, NULL)) >= 0) {
+        while ((c = getopt_long(argc, argv, "hkalM:", options, NULL)) >= 0)
 
                 switch (c) {
 
                 case 'h':
-                        return help();
+                        help();
+                        return 0;
 
                 case ARG_VERSION:
                         puts(PACKAGE_STRING);
@@ -122,7 +119,6 @@ static int parse_argv(int argc, char *argv[]) {
                 default:
                         assert_not_reached("Unhandled option");
                 }
-        }
 
         return 1;
 }
@@ -131,7 +127,7 @@ int main(int argc, char *argv[]) {
         int r = 0, retval = EXIT_FAILURE;
         int output_flags;
         _cleanup_free_ char *root = NULL;
-        _cleanup_bus_unref_ sd_bus *bus = NULL;
+        _cleanup_bus_flush_close_unref_ sd_bus *bus = NULL;
 
         log_parse_environment();
         log_open();
@@ -158,7 +154,7 @@ int main(int argc, char *argv[]) {
 
         r = bus_open_transport(BUS_TRANSPORT_LOCAL, NULL, false, &bus);
         if (r < 0) {
-                log_error("Failed to create bus connection: %s", strerror(-r));
+                log_error_errno(r, "Failed to create bus connection: %m");
                 goto finish;
         }
 
@@ -189,7 +185,7 @@ int main(int argc, char *argv[]) {
 
                 p = get_current_dir_name();
                 if (!p) {
-                        log_error("Cannot determine current working directory: %m");
+                        log_error_errno(errno, "Cannot determine current working directory: %m");
                         goto finish;
                 }
 
@@ -201,19 +197,19 @@ int main(int argc, char *argv[]) {
                         if (arg_machine) {
                                 char *m;
                                 const char *cgroup;
-                                _cleanup_free_ char *scope = NULL;
+                                _cleanup_free_ char *unit = NULL;
                                 _cleanup_free_ char *path = NULL;
                                 _cleanup_bus_message_unref_ sd_bus_message *reply = NULL;
                                 _cleanup_bus_error_free_ sd_bus_error error = SD_BUS_ERROR_NULL;
 
-                                m = strappenda("/run/systemd/machines/", arg_machine);
-                                r = parse_env_file(m, NEWLINE, "SCOPE", &scope, NULL);
+                                m = strjoina("/run/systemd/machines/", arg_machine);
+                                r = parse_env_file(m, NEWLINE, "SCOPE", &unit, NULL);
                                 if (r < 0) {
-                                        log_error("Failed to get machine path: %s", strerror(-r));
+                                        log_error_errno(r, "Failed to get machine path: %m");
                                         goto finish;
                                 }
 
-                                path = unit_dbus_path_from_name(scope);
+                                path = unit_dbus_path_from_name(unit);
                                 if (!path) {
                                         log_oom();
                                         goto finish;
@@ -223,7 +219,7 @@ int main(int argc, char *argv[]) {
                                                 bus,
                                                 "org.freedesktop.systemd1",
                                                 path,
-                                                "org.freedesktop.systemd1.Scope",
+                                                endswith(unit, ".scope") ? "org.freedesktop.systemd1.Scope" : "org.freedesktop.systemd1.Service",
                                                 "ControlGroup",
                                                 &error,
                                                 &reply,
@@ -249,8 +245,8 @@ int main(int argc, char *argv[]) {
                         } else
                                 r = cg_get_root_path(&root);
                         if (r < 0) {
-                                log_error("Failed to get %s path: %s",
-                                          arg_machine ? "machine" : "root", strerror(-r));
+                                log_error_errno(r, "Failed to get %s path: %m",
+                                                arg_machine ? "machine" : "root");
                                 goto finish;
                         }
 
@@ -260,7 +256,7 @@ int main(int argc, char *argv[]) {
         }
 
         if (r < 0) {
-                log_error("Failed to list cgroup tree %s: %s", root, strerror(-r));
+                log_error_errno(r, "Failed to list cgroup tree %s: %m", root);
                 retval = EXIT_FAILURE;
         } else
                 retval = EXIT_SUCCESS;

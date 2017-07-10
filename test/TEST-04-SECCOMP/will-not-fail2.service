@@ -1,6 +1,0 @@
-[Unit]
-Description=Reset SystemCallFilter
-
-[Service]
-ExecStart=/bin/echo "Foo bar"
-SystemCallFilter=

@@ -1,8 +1,0 @@
-[Unit]
-Description=Will fail
-
-[Service]
-ExecStart=/bin/echo "This should not be seen"
-SystemCallFilter=ioperm
-SystemCallFilter=~ioperm
-SystemCallFilter=ioperm

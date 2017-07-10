@@ -7,8 +7,13 @@ export PATH
 KERNEL_VER=${KERNEL_VER-$(uname -r)}
 KERNEL_MODS="/lib/modules/$KERNEL_VER/"
 
-BASICTOOLS="sh bash setsid loadkeys setfont login sushell sulogin gzip sleep echo mount umount cryptsetup date dmsetup modprobe"
-DEBUGTOOLS="df free ls stty cat ps ln ip route dmesg dhclient mkdir cp ping dhclient strace less grep id tty touch du sort"
+if ! ROOTLIBDIR=$(pkg-config --variable=systemdutildir systemd); then
+    echo "WARNING! Cannot determine rootlibdir from pkg-config, assuming /usr/lib/systemd" >&2
+    ROOTLIBDIR=/usr/lib/systemd
+fi
+
+BASICTOOLS="sh bash setsid loadkeys setfont login sulogin gzip sleep echo mount umount cryptsetup date dmsetup modprobe"
+DEBUGTOOLS="df free ls stty cat ps ln ip route dmesg dhclient mkdir cp ping dhclient strace less grep id tty touch du sort hostname"
 
 function find_qemu_bin() {
     # SUSE and Red Hat call the binary qemu-kvm
@@ -37,6 +42,14 @@ function find_qemu_bin() {
 }
 
 run_qemu() {
+    if [ -f /etc/machine-id ]; then
+        read MACHINE_ID < /etc/machine-id
+        [ -z "$INITRD" ] && [ -e "/boot/$MACHINE_ID/$KERNEL_VER/initrd" ] \
+            && INITRD="/boot/$MACHINE_ID/$KERNEL_VER/initrd"
+        [ -z "$KERNEL_BIN" ] && [ -e "/boot/$MACHINE_ID/$KERNEL_VER/linux" ] \
+            && KERNEL_BIN="/boot/$MACHINE_ID/$KERNEL_VER/linux"
+    fi
+
     [ "$KERNEL_BIN" ] || KERNEL_BIN=/boot/vmlinuz-$KERNEL_VER
     [ "$INITRD" ]     || INITRD=/boot/initramfs-${KERNEL_VER}.img
     [ "$QEMU_SMP" ]   || QEMU_SMP=1
@@ -47,7 +60,7 @@ run_qemu() {
 systemd.log_level=debug \
 raid=noautodetect \
 loglevel=2 \
-init=/usr/lib/systemd/systemd \
+init=$ROOTLIBDIR/systemd \
 ro \
 console=ttyS0 \
 selinux=0 \
@@ -72,7 +85,7 @@ $KERNEL_APPEND \
 
 run_nspawn() {
     set -x
-    ../../systemd-nspawn --boot --directory=$TESTDIR/nspawn-root /usr/lib/systemd/systemd $KERNEL_APPEND
+    ../../systemd-nspawn --boot --directory=$TESTDIR/nspawn-root $ROOTLIBDIR/systemd $KERNEL_APPEND
 }
 
 setup_basic_environment() {
@@ -112,7 +125,7 @@ install_systemd() {
     # install compiled files
     (cd $TEST_BASE_DIR/..; set -x; make DESTDIR=$initdir install)
     # remove unneeded documentation
-    rm -fr $initdir/usr/share/{man,doc,gtk-doc}
+    rm -fr $initdir/usr/share/{man,doc}
     # we strip binaries since debug symbols increase binaries size a lot
     # and it could fill the available space
     strip_binaries
@@ -132,8 +145,8 @@ create_empty_image() {
     LOOPDEV=$(losetup --show -P -f $TESTDIR/rootdisk.img)
     [ -b "$LOOPDEV" ] || return 1
     echo "LOOPDEV=$LOOPDEV" >> $STATEFILE
-    sfdisk -C 9600 -H 2 -S 32 -L "$LOOPDEV" <<EOF
-,4800
+    sfdisk "$LOOPDEV" <<EOF
+,290M
 ,
 EOF
 
@@ -227,6 +240,9 @@ EOF
 
 install_basic_tools() {
     [[ $BASICTOOLS ]] && dracut_install $BASICTOOLS
+    dracut_install -o sushell
+    # in Debian ldconfig is just a shell script wrapper around ldconfig.real
+    dracut_install -o ldconfig.real
 }
 
 install_debug_tools() {
@@ -235,12 +251,13 @@ install_debug_tools() {
 
 install_libnss() {
     # install libnss_files for login
-    inst_libdir_file "libnss_files*"
+    NSS_LIBS=$(LD_DEBUG=files getent passwd 2>&1 >/dev/null |sed -n '/calling init: .*libnss_/ {s!^.* /!/!; p}')
+    dracut_install $NSS_LIBS
 }
 
 install_dbus() {
-    inst /usr/lib/systemd/system/dbus.socket
-    inst /usr/lib/systemd/system/dbus.service
+    inst $ROOTLIBDIR/system/dbus.socket
+    inst $ROOTLIBDIR/system/dbus.service
 
     find \
         /etc/dbus-1 -xtype f \
@@ -272,6 +289,7 @@ install_keymaps() {
 
 install_fonts() {
     for i in \
+        /usr/lib/kbd/consolefonts/eurlatgr* \
         /usr/lib/kbd/consolefonts/latarcyrheb-sun16*; do
             [[ -f $i ]] || continue
             inst $i
@@ -286,7 +304,8 @@ install_terminfo() {
 }
 
 setup_testsuite() {
-    cp $TEST_BASE_DIR/{testsuite.target,end.service} $initdir/etc/systemd/system/
+    cp $TEST_BASE_DIR/testsuite.target $initdir/etc/systemd/system/
+    sed "s#@SYSTEMCTL@#$(type -P systemctl)#g" $TEST_BASE_DIR/end.service.in > $initdir/etc/systemd/system/end.service
 
     mkdir -p $initdir/etc/systemd/system/testsuite.target.wants
     ln -fs $TEST_BASE_DIR/testsuite.service $initdir/etc/systemd/system/testsuite.target.wants/testsuite.service

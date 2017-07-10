@@ -23,14 +23,16 @@
 #include <string.h>
 #include <errno.h>
 #include <sys/inotify.h>
-#include <sys/poll.h>
+#include <poll.h>
 
 #include "util.h"
 #include "cgroup-util.h"
 #include "macro.h"
 #include "strv.h"
 #include "fileio.h"
-#include "login-shared.h"
+#include "login-util.h"
+#include "formats-util.h"
+#include "hostname-util.h"
 #include "sd-login.h"
 
 _public_ int sd_pid_get_session(pid_t pid, char **session) {
@@ -73,6 +75,14 @@ _public_ int sd_pid_get_slice(pid_t pid, char **slice) {
         return cg_pid_get_slice(pid, slice);
 }
 
+_public_ int sd_pid_get_user_slice(pid_t pid, char **slice) {
+
+        assert_return(pid >= 0, -EINVAL);
+        assert_return(slice, -EINVAL);
+
+        return cg_pid_get_user_slice(pid, slice);
+}
+
 _public_ int sd_pid_get_owner_uid(pid_t pid, uid_t *uid) {
 
         assert_return(pid >= 0, -EINVAL);
@@ -82,10 +92,10 @@ _public_ int sd_pid_get_owner_uid(pid_t pid, uid_t *uid) {
 }
 
 _public_ int sd_peer_get_session(int fd, char **session) {
-        struct ucred ucred;
+        struct ucred ucred = {};
         int r;
 
-        assert_return(fd >= 0, -EINVAL);
+        assert_return(fd >= 0, -EBADF);
         assert_return(session, -EINVAL);
 
         r = getpeercred(fd, &ucred);
@@ -99,7 +109,7 @@ _public_ int sd_peer_get_owner_uid(int fd, uid_t *uid) {
         struct ucred ucred;
         int r;
 
-        assert_return(fd >= 0, -EINVAL);
+        assert_return(fd >= 0, -EBADF);
         assert_return(uid, -EINVAL);
 
         r = getpeercred(fd, &ucred);
@@ -113,7 +123,7 @@ _public_ int sd_peer_get_unit(int fd, char **unit) {
         struct ucred ucred;
         int r;
 
-        assert_return(fd >= 0, -EINVAL);
+        assert_return(fd >= 0, -EBADF);
         assert_return(unit, -EINVAL);
 
         r = getpeercred(fd, &ucred);
@@ -127,7 +137,7 @@ _public_ int sd_peer_get_user_unit(int fd, char **unit) {
         struct ucred ucred;
         int r;
 
-        assert_return(fd >= 0, -EINVAL);
+        assert_return(fd >= 0, -EBADF);
         assert_return(unit, -EINVAL);
 
         r = getpeercred(fd, &ucred);
@@ -141,7 +151,7 @@ _public_ int sd_peer_get_machine_name(int fd, char **machine) {
         struct ucred ucred;
         int r;
 
-        assert_return(fd >= 0, -EINVAL);
+        assert_return(fd >= 0, -EBADF);
         assert_return(machine, -EINVAL);
 
         r = getpeercred(fd, &ucred);
@@ -155,7 +165,7 @@ _public_ int sd_peer_get_slice(int fd, char **slice) {
         struct ucred ucred;
         int r;
 
-        assert_return(fd >= 0, -EINVAL);
+        assert_return(fd >= 0, -EBADF);
         assert_return(slice, -EINVAL);
 
         r = getpeercred(fd, &ucred);
@@ -163,6 +173,20 @@ _public_ int sd_peer_get_slice(int fd, char **slice) {
                 return r;
 
         return cg_pid_get_slice(ucred.pid, slice);
+}
+
+_public_ int sd_peer_get_user_slice(int fd, char **slice) {
+        struct ucred ucred;
+        int r;
+
+        assert_return(fd >= 0, -EBADF);
+        assert_return(slice, -EINVAL);
+
+        r = getpeercred(fd, &ucred);
+        if (r < 0)
+                return r;
+
+        return cg_pid_get_user_slice(ucred.pid, slice);
 }
 
 static int file_of_uid(uid_t uid, char **p) {
@@ -226,11 +250,10 @@ _public_ int sd_uid_get_display(uid_t uid, char **session) {
 }
 
 _public_ int sd_uid_is_on_seat(uid_t uid, int require_active, const char *seat) {
-        char *w, *state;
         _cleanup_free_ char *t = NULL, *s = NULL, *p = NULL;
         size_t l;
         int r;
-        const char *variable;
+        const char *word, *variable, *state;
 
         assert_return(seat, -EINVAL);
 
@@ -251,8 +274,8 @@ _public_ int sd_uid_is_on_seat(uid_t uid, int require_active, const char *seat) 
         if (asprintf(&t, UID_FMT, uid) < 0)
                 return -ENOMEM;
 
-        FOREACH_WORD(w, l, s, state) {
-                if (strneq(t, w, l))
+        FOREACH_WORD(word, l, s, state) {
+                if (strneq(t, word, l))
                         return 1;
         }
 
@@ -486,6 +509,25 @@ _public_ int sd_session_get_class(const char *session, char **class) {
         return session_get_string(session, "CLASS", class);
 }
 
+_public_ int sd_session_get_desktop(const char *session, char **desktop) {
+        _cleanup_free_ char *escaped = NULL;
+        char *t;
+        int r;
+
+        assert_return(desktop, -EINVAL);
+
+        r = session_get_string(session, "DESKTOP", &escaped);
+        if (r < 0)
+                return r;
+
+        r = cunescape(escaped, 0, &t);
+        if (r < 0)
+                return r;
+
+        *desktop = t;
+        return 0;
+}
+
 _public_ int sd_session_get_display(const char *session, char **display) {
         return session_get_string(session, "DISPLAY", display);
 }
@@ -587,10 +629,10 @@ _public_ int sd_seat_get_sessions(const char *seat, char ***sessions, uid_t **ui
         }
 
         if (uids && t) {
-                char *w, *state;
+                const char *word, *state;
                 size_t l;
 
-                FOREACH_WORD(w, l, t, state)
+                FOREACH_WORD(word, l, t, state)
                         n++;
 
                 if (n > 0) {
@@ -600,10 +642,10 @@ _public_ int sd_seat_get_sessions(const char *seat, char ***sessions, uid_t **ui
                         if (!b)
                                 return -ENOMEM;
 
-                        FOREACH_WORD(w, l, t, state) {
+                        FOREACH_WORD(word, l, t, state) {
                                 _cleanup_free_ char *k = NULL;
 
-                                k = strndup(w, l);
+                                k = strndup(word, l);
                                 if (!k)
                                         return -ENOMEM;
 
@@ -749,7 +791,7 @@ _public_ int sd_get_machine_names(char ***machines) {
 
                 /* Filter out the unit: symlinks */
                 for (a = l, b = l; *a; a++) {
-                        if (startswith(*a, "unit:"))
+                        if (startswith(*a, "unit:") || !machine_name_is_valid(*a))
                                 free(*a);
                         else {
                                 *b = *a;
@@ -773,7 +815,7 @@ _public_ int sd_machine_get_class(const char *machine, char **class) {
         assert_return(machine_name_is_valid(machine), -EINVAL);
         assert_return(class, -EINVAL);
 
-        p = strappenda("/run/systemd/machines/", machine);
+        p = strjoina("/run/systemd/machines/", machine);
         r = parse_env_file(p, NEWLINE, "CLASS", &c, NULL);
         if (r < 0)
                 return r;
@@ -784,6 +826,48 @@ _public_ int sd_machine_get_class(const char *machine, char **class) {
         c = NULL;
 
         return 0;
+}
+
+_public_ int sd_machine_get_ifindices(const char *machine, int **ifindices) {
+        _cleanup_free_ char *netif = NULL;
+        size_t l, allocated = 0, nr = 0;
+        int *ni = NULL;
+        const char *p, *word, *state;
+        int r;
+
+        assert_return(machine_name_is_valid(machine), -EINVAL);
+        assert_return(ifindices, -EINVAL);
+
+        p = strjoina("/run/systemd/machines/", machine);
+        r = parse_env_file(p, NEWLINE, "NETIF", &netif, NULL);
+        if (r < 0)
+                return r;
+        if (!netif) {
+                *ifindices = NULL;
+                return 0;
+        }
+
+        FOREACH_WORD(word, l, netif, state) {
+                char buf[l+1];
+                int ifi;
+
+                *(char*) (mempcpy(buf, word, l)) = 0;
+
+                if (safe_atoi(buf, &ifi) < 0)
+                        continue;
+                if (ifi <= 0)
+                        continue;
+
+                if (!GREEDY_REALLOC(ni, allocated, nr+1)) {
+                        free(ni);
+                        return -ENOMEM;
+                }
+
+                ni[nr++] = ifi;
+        }
+
+        *ifindices = ni;
+        return nr;
 }
 
 static inline int MONITOR_TO_FD(sd_login_monitor *m) {
