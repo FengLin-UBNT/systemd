@@ -423,12 +423,12 @@ fi
 AM_CONDITIONAL(HAVE_BLKID, [test "$have_blkid" = "yes"])
 
 # ------------------------------------------------------------------------------
-have_libmount=no
-PKG_CHECK_MODULES(MOUNT, [ mount >= 2.20 ],
-        [AC_DEFINE(HAVE_LIBMOUNT, 1, [Define if libmount is available]) have_libmount=yes], have_libmount=no)
-if test "x$have_libmount" = xno; then
-        AC_MSG_ERROR([*** libmount support required but libraries not found])
-fi
+have_libmount=yes
+# PKG_CHECK_MODULES(MOUNT, [ mount >= 2.20 ],
+#         [AC_DEFINE(HAVE_LIBMOUNT, 1, [Define if libmount is available]) have_libmount=yes], have_libmount=no)
+# if test "x$have_libmount" = xno; then
+#         AC_MSG_ERROR([*** libmount support required but libraries not found])
+# fi
 AM_CONDITIONAL(HAVE_LIBMOUNT, [test "$have_libmount" = "yes"])
 
 # ------------------------------------------------------------------------------
@@ -683,11 +683,19 @@ AC_ARG_ENABLE([gcrypt],
                 [have_gcrypt=auto])
 
 if test "x${have_gcrypt}" != xno ; then
-        AM_PATH_LIBGCRYPT(
-                [1.4.5],
+        AC_CHECK_HEADER(
+                [gcrypt.h],
                 [have_gcrypt=yes],
                 [if test "x$have_gcrypt" = xyes ; then
                         AC_MSG_ERROR([*** GCRYPT headers not found.])
+                fi])
+
+        AC_CHECK_LIB(
+                [gcrypt],
+                [gcry_check_version],
+                [have_gcrypt=yes],
+                [if test "x$have_gcrypt" = xyes ; then
+                        AC_MSG_ERROR([*** libgcrypt not found.])
                 fi])
 
         if test "x$have_gcrypt" = xyes ; then
